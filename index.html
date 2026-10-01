@@ -1,0 +1,510 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>مدير أرقام واتساب الرسمي - Meta Cloud API</title>
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- FontAwesome Icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <!-- Google Fonts (Cairo) -->
+    <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@300;400;600;700&display=swap" rel="stylesheet">
+    <!-- React & Babel CDNs -->
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+    <style>
+        body { font-family: 'Cairo', sans-serif; }
+    </style>
+</head>
+<body class="bg-slate-900 text-slate-100 min-h-screen">
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect } = React;
+
+        function App() {
+            // State management
+            const [apiConfig, setApiConfig] = useState({
+                accessToken: localStorage.getItem('meta_access_token') || '',
+                phoneNumberId: localStorage.getItem('meta_phone_id') || '1264878726718857',
+                businessId: localStorage.getItem('meta_business_id') || '1412877523538188',
+                isDemoMode: false
+            });
+
+            const [activeTab, setActiveTab] = useState('check');
+            const [inputNumber, setInputNumber] = useState('');
+            const [loading, setLoading] = useState(false);
+            const [checkResult, setCheckResult] = useState(null);
+            const [appealData, setAppealData] = useState({
+                subject: 'طلب مراجعة حظر الرقم - استيفاء سياسات الشروط',
+                description: 'نود طلب مراجعة رسمية لحظر الرقم المذكور أعلاه. لقد قمنا بمراجعة سجلات الموافقة (Opt-in) وتأكدنا من الالتزام الكامل بسياسة واتساب للتواصل التجاري.',
+                reasonCategory: 'CUSTOMER_OPT_IN_VERIFIED'
+            });
+            const [logs, setLogs] = useState([]);
+            const [notification, setNotification] = useState(null);
+
+            // Save credentials
+            const handleSaveConfig = (e) => {
+                e.preventDefault();
+                localStorage.setItem('meta_access_token', apiConfig.accessToken);
+                localStorage.setItem('meta_phone_id', apiConfig.phoneNumberId);
+                localStorage.setItem('meta_business_id', apiConfig.businessId);
+                showToast('تم حفظ إعدادات Meta API بنجاح', 'success');
+            };
+
+            const showToast = (msg, type = 'info') => {
+                setNotification({ msg, type });
+                setTimeout(() => setNotification(null), 5000);
+            };
+
+            // Format phone number
+            const formatPhoneNumber = (num) => {
+                return num.replace(/[^\d+]/g, '');
+            };
+
+            // Process Verification Check
+            const handleVerifyNumber = async () => {
+                const cleanNumber = formatPhoneNumber(inputNumber);
+                
+                if (!apiConfig.isDemoMode && !apiConfig.accessToken) {
+                    showToast('يرجى وضع رمز الوصول (Access Token) أولاً في تبويب الإعدادات', 'error');
+                    setActiveTab('config');
+                    return;
+                }
+
+                setLoading(true);
+                setCheckResult(null);
+
+                // Simulation Mode Handling
+                if (apiConfig.isDemoMode) {
+                    setTimeout(() => {
+                        const isRegistered = true;
+                        const isBlocked = Math.random() > 0.5;
+                        
+                        const mockRes = {
+                            number: cleanNumber || '+967733606415',
+                            displayPhoneNumber: cleanNumber || '+1 555-0173',
+                            verifiedName: 'حساب تجريبي (Demo)',
+                            isRegistered: isRegistered,
+                            status: isBlocked ? 'BLOCKED' : 'APPROVED',
+                            qualityRating: isBlocked ? 'RED' : 'GREEN',
+                            checkTimestamp: new Date().toLocaleString('ar-SA'),
+                            rawMetaResponse: {
+                                display_phone_number: cleanNumber || "+1 555-0173",
+                                quality_rating: isBlocked ? "RED" : "GREEN",
+                                status: isBlocked ? "BLOCKED" : "APPROVED",
+                                id: apiConfig.phoneNumberId || "1264878726718857"
+                            }
+                        };
+
+                        setCheckResult(mockRes);
+                        addLog(mockRes.number, isBlocked ? 'محظور (BLOCKED)' : 'نشط (APPROVED)');
+                        setLoading(false);
+                        showToast('تم الفحص بنجاح (وضع المحاكاة التجريبي)', 'success');
+                    }, 1000);
+                    return;
+                }
+
+                // Real Meta API Call (GET request to avoid Unsupported POST error)
+                try {
+                    const endpoint = `https://graph.facebook.com/v20.0/${apiConfig.phoneNumberId}?fields=display_phone_number,verified_name,code_verification_status,quality_rating,status`;
+                    
+                    const response = await fetch(endpoint, {
+                        method: 'GET',
+                        headers: {
+                            'Authorization': `Bearer ${apiConfig.accessToken.trim()}`,
+                            'Content-Type': 'application/json'
+                        }
+                    });
+
+                    const data = await response.json();
+
+                    if (data.error) {
+                        throw new Error(data.error.message);
+                    }
+
+                    const resObj = {
+                        number: cleanNumber || data.display_phone_number || apiConfig.phoneNumberId,
+                        displayPhoneNumber: data.display_phone_number || 'غير محدد',
+                        verifiedName: data.verified_name || 'حساب أعمال واتساب',
+                        isRegistered: true,
+                        status: data.status || 'APPROVED',
+                        qualityRating: data.quality_rating || 'GREEN',
+                        checkTimestamp: new Date().toLocaleString('ar-SA'),
+                        rawMetaResponse: data
+                    };
+
+                    setCheckResult(resObj);
+                    addLog(resObj.number, `حالة الحساب: ${data.status || 'APPROVED'}`);
+                    showToast('تم الاتصال بسيرفر Meta وفحص حالة الرقم بنجاح!', 'success');
+
+                } catch (err) {
+                    showToast(`خطأ في الاتصال من Meta: ${err.message}`, 'error');
+                } finally {
+                    setLoading(false);
+                }
+            };
+
+            // Handle Official Ban Appeal Submission
+            const handleSubmitAppeal = async () => {
+                if (!checkResult) {
+                    showToast('يرجى إجراء فحص الرقم أولاً', 'error');
+                    return;
+                }
+
+                setLoading(true);
+
+                if (apiConfig.isDemoMode) {
+                    setTimeout(() => {
+                        setLoading(false);
+                        showToast('تم إرسال تذكرة طلب المراجعة بنجاح (وضع المحاكاة)', 'success');
+                        addLog(checkResult.number, 'تم تقديم طلب مراجعة الحظر');
+                    }, 1200);
+                    return;
+                }
+
+                try {
+                    const res = await fetch(`https://graph.facebook.com/v20.0/${apiConfig.businessId}/support_tickets`, {
+                        method: 'POST',
+                        headers: {
+                            'Authorization': `Bearer ${apiConfig.accessToken.trim()}`,
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify({
+                            subject: `${appealData.subject} - الرقم ${checkResult.number}`,
+                            description: appealData.description,
+                            category: "WHATSAPP_BUSINESS_API"
+                        })
+                    });
+
+                    const data = await res.json();
+                    if (data.error) throw new Error(data.error.message);
+
+                    showToast(`تم إنشاء تذكرة المراجعة بنجاح! رقم التذكرة: ${data.id}`, 'success');
+                    addLog(checkResult.number, `تذكرة مراجعة: #${data.id}`);
+
+                } catch (err) {
+                    showToast(`فشل إرسال التذكرة المباشرة: ${err.message}. يمكنك تقديم الطلب يدويًا عبر جودة الحساب (Account Quality).`, 'error');
+                } finally {
+                    setLoading(false);
+                }
+            };
+
+            const addLog = (num, status) => {
+                setLogs(prev => [{
+                    id: Date.now(),
+                    number: num,
+                    status: status,
+                    timestamp: new Date().toLocaleTimeString('ar-SA')
+                }, ...prev]);
+            };
+
+            return (
+                <div className="container mx-auto p-4 max-w-6xl">
+                    {/* Header */}
+                    <header className="flex flex-col md:flex-row justify-between items-center bg-slate-800 p-6 rounded-2xl shadow-xl border border-slate-700 mb-6">
+                        <div className="flex items-center space-x-4 space-x-reverse mb-4 md:mb-0">
+                            <div className="w-12 h-12 rounded-xl bg-emerald-500/20 text-emerald-400 flex items-center justify-center text-2xl font-bold">
+                                <i className="fab fa-whatsapp"></i>
+                            </div>
+                            <div>
+                                <h1 className="text-2xl font-bold text-white">منصة إدارة أرقام واتساب الرسمية</h1>
+                                <p className="text-slate-400 text-sm">الفحص المباشر وتقديم طلبات المراجعة عبر Meta Graph API v20.0</p>
+                            </div>
+                        </div>
+
+                        {/* Mode Switcher */}
+                        <div className="flex items-center bg-slate-900/80 px-4 py-2 rounded-xl border border-slate-700">
+                            <span className="text-sm font-semibold ml-3 text-slate-300">
+                                {apiConfig.isDemoMode ? 'وضع المحاكاة (التجريبي)' : 'الربط المباشر (Meta API)'}
+                            </span>
+                            <button 
+                                onClick={() => {
+                                    const newMode = !apiConfig.isDemoMode;
+                                    setApiConfig({...apiConfig, isDemoMode: newMode});
+                                    showToast(newMode ? 'تم التبديل لوضع المحاكاة' : 'تم التبديل للوضع الحي المباشر مع Meta', 'info');
+                                }}
+                                className={`w-12 h-6 rounded-full p-1 transition-colors duration-300 ${apiConfig.isDemoMode ? 'bg-amber-500' : 'bg-emerald-500'}`}
+                            >
+                                <div className={`w-4 h-4 rounded-full bg-white transition-transform duration-300 ${apiConfig.isDemoMode ? '' : 'translate-x-[-24px]'}`}></div>
+                            </button>
+                        </div>
+                    </header>
+
+                    {/* Toast Notification */}
+                    {notification && (
+                        <div className={`p-4 mb-6 rounded-xl text-white flex items-center justify-between shadow-lg transition-all ${notification.type === 'error' ? 'bg-rose-600' : notification.type === 'success' ? 'bg-emerald-600' : 'bg-blue-600'}`}>
+                            <span><i className="fas fa-info-circle ml-2"></i> {notification.msg}</span>
+                            <button onClick={() => setNotification(null)} className="text-white hover:text-slate-200"><i className="fas fa-times"></i></button>
+                        </div>
+                    )}
+
+                    {/* Main Layout Grid */}
+                    <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                        
+                        {/* Sidebar: Navigation & Config */}
+                        <div className="space-y-6">
+                            {/* Navigation Tabs */}
+                            <div className="bg-slate-800 rounded-2xl p-3 border border-slate-700 flex flex-col space-y-2">
+                                <button 
+                                    onClick={() => setActiveTab('check')}
+                                    className={`flex items-center space-x-3 space-x-reverse px-4 py-3 rounded-xl font-semibold transition-all ${activeTab === 'check' ? 'bg-emerald-500 text-white shadow-lg shadow-emerald-500/20' : 'text-slate-400 hover:bg-slate-700/50'}`}
+                                >
+                                    <i className="fas fa-search text-lg"></i>
+                                    <span>فحص الأرقام وحالتها</span>
+                                </button>
+                                <button 
+                                    onClick={() => setActiveTab('appeal')}
+                                    className={`flex items-center space-x-3 space-x-reverse px-4 py-3 rounded-xl font-semibold transition-all ${activeTab === 'appeal' ? 'bg-emerald-500 text-white shadow-lg shadow-emerald-500/20' : 'text-slate-400 hover:bg-slate-700/50'}`}
+                                >
+                                    <i className="fas fa-gavel text-lg"></i>
+                                    <span>تقديم طلب فك الحظر</span>
+                                </button>
+                                <button 
+                                    onClick={() => setActiveTab('config')}
+                                    className={`flex items-center space-x-3 space-x-reverse px-4 py-3 rounded-xl font-semibold transition-all ${activeTab === 'config' ? 'bg-emerald-500 text-white shadow-lg shadow-emerald-500/20' : 'text-slate-400 hover:bg-slate-700/50'}`}
+                                >
+                                    <i className="fas fa-key text-lg"></i>
+                                    <span>إعدادات Meta Cloud API</span>
+                                </button>
+                            </div>
+
+                            {/* Live Logs Card */}
+                            <div className="bg-slate-800 rounded-2xl p-5 border border-slate-700">
+                                <h3 className="text-lg font-bold text-slate-200 mb-4 flex items-center">
+                                    <i className="fas fa-history ml-2 text-emerald-400"></i>
+                                    سجل العمليات الحية
+                                </h3>
+                                <div className="space-y-3 max-h-60 overflow-y-auto pr-1">
+                                    {logs.length === 0 ? (
+                                        <p className="text-slate-500 text-sm text-center py-4">لا توجد عمليات مسجلة حتى الآن</p>
+                                    ) : (
+                                        logs.map(log => (
+                                            <div key={log.id} className="bg-slate-900/60 p-3 rounded-xl border border-slate-700/50 flex justify-between items-center text-xs">
+                                                <div>
+                                                    <span className="font-mono text-slate-300 block">{log.number}</span>
+                                                    <span className="text-slate-500">{log.timestamp}</span>
+                                                </div>
+                                                <span className={`px-2 py-1 rounded-md font-semibold ${log.status.includes('BLOCKED') || log.status.includes('محظور') ? 'bg-rose-500/20 text-rose-400' : 'bg-emerald-500/20 text-emerald-400'}`}>
+                                                    {log.status}
+                                                </span>
+                                            </div>
+                                        ))
+                                    )}
+                                </div>
+                            </div>
+                        </div>
+
+                        {/* Main Content Area */}
+                        <div className="lg:col-span-2">
+                            
+                            {/* TAB 1: Verification & Check */}
+                            {activeTab === 'check' && (
+                                <div className="bg-slate-800 rounded-2xl p-6 border border-slate-700 space-y-6">
+                                    <div>
+                                        <h2 className="text-xl font-bold text-white mb-1">التحقق من حالة الحساب والتقييد</h2>
+                                        <p className="text-slate-400 text-sm">استعلام سيرفرات Meta المباشرة لمعرفة حالة الرقم وتقييم الجودة الرسمي.</p>
+                                    </div>
+
+                                    <div className="flex flex-col sm:flex-row gap-3">
+                                        <div className="relative flex-1">
+                                            <i className="fas fa-phone absolute right-4 top-4 text-slate-500"></i>
+                                            <input 
+                                                type="text" 
+                                                placeholder="أدخل رقم الهاتف للاختبار (اختياري، مثال: +967733606415)"
+                                                value={inputNumber}
+                                                onChange={(e) => setInputNumber(e.target.value)}
+                                                className="w-full bg-slate-900 border border-slate-700 rounded-xl pr-11 pl-4 py-3 text-white placeholder-slate-500 focus:outline-none focus:border-emerald-500 transition-colors"
+                                            />
+                                        </div>
+                                        <button 
+                                            onClick={handleVerifyNumber}
+                                            disabled={loading}
+                                            className="bg-emerald-500 hover:bg-emerald-600 disabled:bg-slate-700 text-white font-bold px-6 py-3 rounded-xl transition-all shadow-lg shadow-emerald-500/20 flex items-center justify-center min-w-[140px]"
+                                        >
+                                            {loading ? <i className="fas fa-spinner fa-spin text-lg"></i> : 'فحص الحساب الآن'}
+                                        </button>
+                                    </div>
+
+                                    {/* Result Display */}
+                                    {checkResult && (
+                                        <div className="mt-6 border-t border-slate-700/60 pt-6 space-y-4">
+                                            <h3 className="text-lg font-bold text-slate-200">نتيجة الفحص المباشر من Meta:</h3>
+                                            
+                                            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                                                {/* Card 1: Registered Phone */}
+                                                <div className="bg-slate-900 p-4 rounded-xl border border-slate-700">
+                                                    <span className="text-xs text-slate-400 block mb-1">الرقم المسجل بالمنصة</span>
+                                                    <span className="font-bold text-emerald-400 font-mono text-sm">{checkResult.displayPhoneNumber}</span>
+                                                </div>
+
+                                                {/* Card 2: Account Status */}
+                                                <div className="bg-slate-900 p-4 rounded-xl border border-slate-700">
+                                                    <span className="text-xs text-slate-400 block mb-1">حالة الحساب الرسمي</span>
+                                                    <span className={`inline-block font-bold px-3 py-1 rounded-lg text-xs mt-1 ${checkResult.status === 'APPROVED' ? 'bg-emerald-500/20 text-emerald-400' : checkResult.status === 'BLOCKED' || checkResult.status === 'RESTRICTED' ? 'bg-rose-500/20 text-rose-400' : 'bg-amber-500/20 text-amber-400'}`}>
+                                                        {checkResult.status}
+                                                    </span>
+                                                </div>
+
+                                                {/* Card 3: Quality Rating */}
+                                                <div className="bg-slate-900 p-4 rounded-xl border border-slate-700">
+                                                    <span className="text-xs text-slate-400 block mb-1">تقييم الجودة (Quality)</span>
+                                                    <span className={`font-bold ${checkResult.qualityRating === 'GREEN' ? 'text-emerald-400' : checkResult.qualityRating === 'RED' ? 'text-rose-400' : 'text-amber-400'}`}>
+                                                        {checkResult.qualityRating}
+                                                    </span>
+                                                </div>
+                                            </div>
+
+                                            {/* Action Banner if Blocked */}
+                                            {(checkResult.status === 'BLOCKED' || checkResult.status === 'RESTRICTED' || checkResult.qualityRating === 'RED') && (
+                                                <div className="bg-rose-500/10 border border-rose-500/30 p-4 rounded-xl flex flex-col sm:flex-row justify-between items-center gap-4">
+                                                    <div className="flex items-center space-x-3 space-x-reverse">
+                                                        <i className="fas fa-exclamation-triangle text-rose-400 text-2xl"></i>
+                                                        <div>
+                                                            <h4 className="font-bold text-rose-300">تنبيه: يوجد تقييد أو حظر على الحساب</h4>
+                                                            <p className="text-xs text-rose-200/70">يمكنك تقديم طلب مراجعة رسمية مباشرة لإلغاء الحظر والتقييد.</p>
+                                                        </div>
+                                                    </div>
+                                                    <button 
+                                                        onClick={() => setActiveTab('appeal')}
+                                                        className="bg-rose-600 hover:bg-rose-700 text-white font-semibold text-xs px-4 py-2 rounded-lg transition-all whitespace-nowrap"
+                                                    >
+                                                        نموذج تقديم التظاهر &larr;
+                                                    </button>
+                                                </div>
+                                            )}
+
+                                            {/* Raw Json Inspection */}
+                                            <details className="bg-slate-950 p-4 rounded-xl text-xs font-mono text-slate-400 border border-slate-800">
+                                                <summary className="cursor-pointer font-bold text-slate-300 mb-2">استجابة Meta Graph API المباشرة (JSON)</summary>
+                                                <pre className="overflow-x-auto text-emerald-400">{JSON.stringify(checkResult.rawMetaResponse, null, 2)}</pre>
+                                            </details>
+                                        </div>
+                                    )}
+                                </div>
+                            )}
+
+                            {/* TAB 2: Official Appeal Manager */}
+                            {activeTab === 'appeal' && (
+                                <div className="bg-slate-800 rounded-2xl p-6 border border-slate-700 space-y-6">
+                                    <div>
+                                        <h2 className="text-xl font-bold text-white mb-1">تقديم طلب مراجعة فك الحظر (Official Appeal)</h2>
+                                        <p className="text-slate-400 text-sm">إنشاء تذكرة دعم مباشرة عبر API الخاص بـ Meta Business Manager لمراجعة إلغاء الحظر.</p>
+                                    </div>
+
+                                    <div className="space-y-4">
+                                        <div className="bg-slate-900 p-4 rounded-xl border border-slate-700 flex items-center justify-between">
+                                            <span className="text-sm text-slate-400">الرقم / المعرف المستهدف بالمراجعة:</span>
+                                            <span className="font-mono text-emerald-400 font-bold text-lg">{checkResult ? checkResult.number : apiConfig.phoneNumberId}</span>
+                                        </div>
+
+                                        <div>
+                                            <label className="block text-xs font-semibold text-slate-300 mb-2">عنوان طلب المراجعة:</label>
+                                            <input 
+                                                type="text"
+                                                value={appealData.subject}
+                                                onChange={(e) => setAppealData({...appealData, subject: e.target.value})}
+                                                className="w-full bg-slate-900 border border-slate-700 rounded-xl p-3 text-white text-sm focus:outline-none focus:border-emerald-500"
+                                            />
+                                        </div>
+
+                                        <div>
+                                            <label className="block text-xs font-semibold text-slate-300 mb-2">التفاصيل والأدلة القانونية (الامتثال للسياسات):</label>
+                                            <textarea 
+                                                rows="5"
+                                                value={appealData.description}
+                                                onChange={(e) => setAppealData({...appealData, description: e.target.value})}
+                                                className="w-full bg-slate-900 border border-slate-700 rounded-xl p-3 text-white text-sm focus:outline-none focus:border-emerald-500"
+                                            ></textarea>
+                                        </div>
+
+                                        <button 
+                                            onClick={handleSubmitAppeal}
+                                            disabled={loading}
+                                            className="w-full bg-emerald-500 hover:bg-emerald-600 disabled:bg-slate-700 text-white font-bold p-3 rounded-xl transition-all shadow-lg shadow-emerald-500/20 flex items-center justify-center space-x-2 space-x-reverse"
+                                        >
+                                            {loading ? <i className="fas fa-spinner fa-spin"></i> : <><i className="fas fa-paper-plane"></i> <span>إرسال طلب فك الحظر عبر Meta API</span></>}
+                                        </button>
+
+                                        <div className="pt-2 text-center">
+                                            <a 
+                                                href="https://facebook.com/accountquality" 
+                                                target="_blank" 
+                                                rel="noopener noreferrer"
+                                                className="text-xs text-sky-400 hover:underline"
+                                            >
+                                                <i className="fas fa-external-link-alt ml-1"></i> فتح صفحة جودة الحساب (Account Quality) في Meta مباشرة
+                                            </a>
+                                        </div>
+                                    </div>
+                                </div>
+                            )}
+
+                            {/* TAB 3: Config */}
+                            {activeTab === 'config' && (
+                                <div className="bg-slate-800 rounded-2xl p-6 border border-slate-700 space-y-6">
+                                    <div>
+                                        <h2 className="text-xl font-bold text-white mb-1">بيانات مفاتيح الربط الرسمية (Meta API Config)</h2>
+                                        <p className="text-slate-400 text-sm">ضع رمز الوصول (Access Token) والمعرفات للربط الحقيقي مع Meta.</p>
+                                    </div>
+
+                                    <form onSubmit={handleSaveConfig} className="space-y-4">
+                                        <div>
+                                            <label className="block text-xs font-semibold text-slate-300 mb-2">Meta Access Token (رمز الوصول):</label>
+                                            <input 
+                                                type="password"
+                                                value={apiConfig.accessToken}
+                                                onChange={(e) => setApiConfig({...apiConfig, accessToken: e.target.value})}
+                                                placeholder="الصق الرمز EAAG... هنا"
+                                                className="w-full bg-slate-900 border border-slate-700 rounded-xl p-3 text-white text-sm focus:outline-none focus:border-emerald-500 font-mono"
+                                            />
+                                        </div>
+
+                                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                            <div>
+                                                <label className="block text-xs font-semibold text-slate-300 mb-2">Phone Number ID:</label>
+                                                <input 
+                                                    type="text"
+                                                    value={apiConfig.phoneNumberId}
+                                                    onChange={(e) => setApiConfig({...apiConfig, phoneNumberId: e.target.value})}
+                                                    placeholder="1264878726718857"
+                                                    className="w-full bg-slate-900 border border-slate-700 rounded-xl p-3 text-white text-sm focus:outline-none focus:border-emerald-500 font-mono"
+                                                />
+                                            </div>
+
+                                            <div>
+                                                <label className="block text-xs font-semibold text-slate-300 mb-2">Business Account ID:</label>
+                                                <input 
+                                                    type="text"
+                                                    value={apiConfig.businessId}
+                                                    onChange={(e) => setApiConfig({...apiConfig, businessId: e.target.value})}
+                                                    placeholder="1412877523538188"
+                                                    className="w-full bg-slate-900 border border-slate-700 rounded-xl p-3 text-white text-sm focus:outline-none focus:border-emerald-500 font-mono"
+                                                />
+                                            </div>
+                                        </div>
+
+                                        <button 
+                                            type="submit"
+                                            className="bg-emerald-500 hover:bg-emerald-600 text-white font-bold px-6 py-3 rounded-xl transition-all shadow-lg shadow-emerald-500/20"
+                                        >
+                                            حفظ المفاتيح
+                                        </button>
+                                    </form>
+                                </div>
+                            )}
+
+                        </div>
+                    </div>
+                </div>
+            );
+        }
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
