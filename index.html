@@ -31,6 +31,7 @@
                 accessToken: localStorage.getItem('meta_access_token') || '',
                 phoneNumberId: localStorage.getItem('meta_phone_id') || '1264878726718857',
                 businessId: localStorage.getItem('meta_business_id') || '1412877523538188',
+                workerUrl: localStorage.getItem('meta_worker_url') || '',
                 isDemoMode: false
             });
 
@@ -52,7 +53,8 @@
                 localStorage.setItem('meta_access_token', apiConfig.accessToken);
                 localStorage.setItem('meta_phone_id', apiConfig.phoneNumberId);
                 localStorage.setItem('meta_business_id', apiConfig.businessId);
-                showToast('تم حفظ إعدادات Meta API بنجاح', 'success');
+                localStorage.setItem('meta_worker_url', apiConfig.workerUrl);
+                showToast('تم حفظ الإعدادات ورابط الخادم الوسيط بنجاح', 'success');
             };
 
             const showToast = (msg, type = 'info') => {
@@ -60,17 +62,16 @@
                 setTimeout(() => setNotification(null), 5000);
             };
 
-            // Format phone number
             const formatPhoneNumber = (num) => {
                 return num.replace(/[^\d+]/g, '');
             };
 
-            // Process Verification Check
+            // Process Verification Check via Worker
             const handleVerifyNumber = async () => {
                 const cleanNumber = formatPhoneNumber(inputNumber);
                 
-                if (!apiConfig.isDemoMode && !apiConfig.accessToken) {
-                    showToast('يرجى وضع رمز الوصول (Access Token) أولاً في تبويب الإعدادات', 'error');
+                if (!apiConfig.isDemoMode && !apiConfig.workerUrl) {
+                    showToast('يرجى وضع رابط الخادم الوسيط (Worker URL) أولاً في تبويب الإعدادات', 'error');
                     setActiveTab('config');
                     return;
                 }
@@ -108,16 +109,17 @@
                     return;
                 }
 
-                // Real Meta API Call (GET request to avoid Unsupported POST error)
+                // Call Cloudflare Worker Proxy
                 try {
-                    const endpoint = `https://graph.facebook.com/v20.0/${apiConfig.phoneNumberId}?fields=display_phone_number,verified_name,code_verification_status,quality_rating,status`;
+                    const endpoint = `${apiConfig.workerUrl.replace(/\/$/, '')}/api/check`;
                     
                     const response = await fetch(endpoint, {
-                        method: 'GET',
-                        headers: {
-                            'Authorization': `Bearer ${apiConfig.accessToken.trim()}`,
-                            'Content-Type': 'application/json'
-                        }
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            phoneNumberId: apiConfig.phoneNumberId,
+                            accessToken: apiConfig.accessToken
+                        })
                     });
 
                     const data = await response.json();
@@ -139,19 +141,24 @@
 
                     setCheckResult(resObj);
                     addLog(resObj.number, `حالة الحساب: ${data.status || 'APPROVED'}`);
-                    showToast('تم الاتصال بسيرفر Meta وفحص حالة الرقم بنجاح!', 'success');
+                    showToast('تم الاتصال بسيرفر Meta عبر الخادم الوسيط بنجاح!', 'success');
 
                 } catch (err) {
-                    showToast(`خطأ في الاتصال من Meta: ${err.message}`, 'error');
+                    showToast(`خطأ في الاتصال: ${err.message}`, 'error');
                 } finally {
                     setLoading(false);
                 }
             };
 
-            // Handle Official Ban Appeal Submission
+            // Handle Official Appeal via Worker
             const handleSubmitAppeal = async () => {
                 if (!checkResult) {
                     showToast('يرجى إجراء فحص الرقم أولاً', 'error');
+                    return;
+                }
+
+                if (!apiConfig.workerUrl) {
+                    showToast('يرجى إضافة رابط الخادم الوسيط في الإعدادات', 'error');
                     return;
                 }
 
@@ -167,16 +174,15 @@
                 }
 
                 try {
-                    const res = await fetch(`https://graph.facebook.com/v20.0/${apiConfig.businessId}/support_tickets`, {
+                    const endpoint = `${apiConfig.workerUrl.replace(/\/$/, '')}/api/appeal`;
+                    const res = await fetch(endpoint, {
                         method: 'POST',
-                        headers: {
-                            'Authorization': `Bearer ${apiConfig.accessToken.trim()}`,
-                            'Content-Type': 'application/json'
-                        },
+                        headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({
+                            businessId: apiConfig.businessId,
+                            accessToken: apiConfig.accessToken,
                             subject: `${appealData.subject} - الرقم ${checkResult.number}`,
-                            description: appealData.description,
-                            category: "WHATSAPP_BUSINESS_API"
+                            description: appealData.description
                         })
                     });
 
@@ -187,7 +193,7 @@
                     addLog(checkResult.number, `تذكرة مراجعة: #${data.id}`);
 
                 } catch (err) {
-                    showToast(`فشل إرسال التذكرة المباشرة: ${err.message}. يمكنك تقديم الطلب يدويًا عبر جودة الحساب (Account Quality).`, 'error');
+                    showToast(`فشل إرسال التذكرة: ${err.message}`, 'error');
                 } finally {
                     setLoading(false);
                 }
@@ -204,7 +210,6 @@
 
             return (
                 <div className="container mx-auto p-4 max-w-6xl">
-                    {/* Header */}
                     <header className="flex flex-col md:flex-row justify-between items-center bg-slate-800 p-6 rounded-2xl shadow-xl border border-slate-700 mb-6">
                         <div className="flex items-center space-x-4 space-x-reverse mb-4 md:mb-0">
                             <div className="w-12 h-12 rounded-xl bg-emerald-500/20 text-emerald-400 flex items-center justify-center text-2xl font-bold">
@@ -212,11 +217,10 @@
                             </div>
                             <div>
                                 <h1 className="text-2xl font-bold text-white">منصة إدارة أرقام واتساب الرسمية</h1>
-                                <p className="text-slate-400 text-sm">الفحص المباشر وتقديم طلبات المراجعة عبر Meta Graph API v20.0</p>
+                                <p className="text-slate-400 text-sm">الفحص المباشر عبر Cloudflare Proxy و Meta Graph API v20.0</p>
                             </div>
                         </div>
 
-                        {/* Mode Switcher */}
                         <div className="flex items-center bg-slate-900/80 px-4 py-2 rounded-xl border border-slate-700">
                             <span className="text-sm font-semibold ml-3 text-slate-300">
                                 {apiConfig.isDemoMode ? 'وضع المحاكاة (التجريبي)' : 'الربط المباشر (Meta API)'}
@@ -225,7 +229,7 @@
                                 onClick={() => {
                                     const newMode = !apiConfig.isDemoMode;
                                     setApiConfig({...apiConfig, isDemoMode: newMode});
-                                    showToast(newMode ? 'تم التبديل لوضع المحاكاة' : 'تم التبديل للوضع الحي المباشر مع Meta', 'info');
+                                    showToast(newMode ? 'تم التبديل لوضع المحاكاة' : 'تم التبديل للوضع الحي المباشر', 'info');
                                 }}
                                 className={`w-12 h-6 rounded-full p-1 transition-colors duration-300 ${apiConfig.isDemoMode ? 'bg-amber-500' : 'bg-emerald-500'}`}
                             >
@@ -234,7 +238,6 @@
                         </div>
                     </header>
 
-                    {/* Toast Notification */}
                     {notification && (
                         <div className={`p-4 mb-6 rounded-xl text-white flex items-center justify-between shadow-lg transition-all ${notification.type === 'error' ? 'bg-rose-600' : notification.type === 'success' ? 'bg-emerald-600' : 'bg-blue-600'}`}>
                             <span><i className="fas fa-info-circle ml-2"></i> {notification.msg}</span>
@@ -242,12 +245,8 @@
                         </div>
                     )}
 
-                    {/* Main Layout Grid */}
                     <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-                        
-                        {/* Sidebar: Navigation & Config */}
                         <div className="space-y-6">
-                            {/* Navigation Tabs */}
                             <div className="bg-slate-800 rounded-2xl p-3 border border-slate-700 flex flex-col space-y-2">
                                 <button 
                                     onClick={() => setActiveTab('check')}
@@ -268,11 +267,10 @@
                                     className={`flex items-center space-x-3 space-x-reverse px-4 py-3 rounded-xl font-semibold transition-all ${activeTab === 'config' ? 'bg-emerald-500 text-white shadow-lg shadow-emerald-500/20' : 'text-slate-400 hover:bg-slate-700/50'}`}
                                 >
                                     <i className="fas fa-key text-lg"></i>
-                                    <span>إعدادات Meta Cloud API</span>
+                                    <span>إعدادات Meta & Proxy</span>
                                 </button>
                             </div>
 
-                            {/* Live Logs Card */}
                             <div className="bg-slate-800 rounded-2xl p-5 border border-slate-700">
                                 <h3 className="text-lg font-bold text-slate-200 mb-4 flex items-center">
                                     <i className="fas fa-history ml-2 text-emerald-400"></i>
@@ -298,15 +296,12 @@
                             </div>
                         </div>
 
-                        {/* Main Content Area */}
                         <div className="lg:col-span-2">
-                            
-                            {/* TAB 1: Verification & Check */}
                             {activeTab === 'check' && (
                                 <div className="bg-slate-800 rounded-2xl p-6 border border-slate-700 space-y-6">
                                     <div>
                                         <h2 className="text-xl font-bold text-white mb-1">التحقق من حالة الحساب والتقييد</h2>
-                                        <p className="text-slate-400 text-sm">استعلام سيرفرات Meta المباشرة لمعرفة حالة الرقم وتقييم الجودة الرسمي.</p>
+                                        <p className="text-slate-400 text-sm">استعلام سيرفرات Meta المباشرة عبر الخادم الوسيط لمعرفة حالة الرقم الجودة.</p>
                                     </div>
 
                                     <div className="flex flex-col sm:flex-row gap-3">
@@ -314,7 +309,7 @@
                                             <i className="fas fa-phone absolute right-4 top-4 text-slate-500"></i>
                                             <input 
                                                 type="text" 
-                                                placeholder="أدخل رقم الهاتف للاختبار (اختياري، مثال: +967733606415)"
+                                                placeholder="أدخل رقم الهاتف للاختبار (مثال: +967733606415)"
                                                 value={inputNumber}
                                                 onChange={(e) => setInputNumber(e.target.value)}
                                                 className="w-full bg-slate-900 border border-slate-700 rounded-xl pr-11 pl-4 py-3 text-white placeholder-slate-500 focus:outline-none focus:border-emerald-500 transition-colors"
@@ -329,19 +324,16 @@
                                         </button>
                                     </div>
 
-                                    {/* Result Display */}
                                     {checkResult && (
                                         <div className="mt-6 border-t border-slate-700/60 pt-6 space-y-4">
                                             <h3 className="text-lg font-bold text-slate-200">نتيجة الفحص المباشر من Meta:</h3>
                                             
                                             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                                                {/* Card 1: Registered Phone */}
                                                 <div className="bg-slate-900 p-4 rounded-xl border border-slate-700">
                                                     <span className="text-xs text-slate-400 block mb-1">الرقم المسجل بالمنصة</span>
                                                     <span className="font-bold text-emerald-400 font-mono text-sm">{checkResult.displayPhoneNumber}</span>
                                                 </div>
 
-                                                {/* Card 2: Account Status */}
                                                 <div className="bg-slate-900 p-4 rounded-xl border border-slate-700">
                                                     <span className="text-xs text-slate-400 block mb-1">حالة الحساب الرسمي</span>
                                                     <span className={`inline-block font-bold px-3 py-1 rounded-lg text-xs mt-1 ${checkResult.status === 'APPROVED' ? 'bg-emerald-500/20 text-emerald-400' : checkResult.status === 'BLOCKED' || checkResult.status === 'RESTRICTED' ? 'bg-rose-500/20 text-rose-400' : 'bg-amber-500/20 text-amber-400'}`}>
@@ -349,7 +341,6 @@
                                                     </span>
                                                 </div>
 
-                                                {/* Card 3: Quality Rating */}
                                                 <div className="bg-slate-900 p-4 rounded-xl border border-slate-700">
                                                     <span className="text-xs text-slate-400 block mb-1">تقييم الجودة (Quality)</span>
                                                     <span className={`font-bold ${checkResult.qualityRating === 'GREEN' ? 'text-emerald-400' : checkResult.qualityRating === 'RED' ? 'text-rose-400' : 'text-amber-400'}`}>
@@ -358,7 +349,6 @@
                                                 </div>
                                             </div>
 
-                                            {/* Action Banner if Blocked */}
                                             {(checkResult.status === 'BLOCKED' || checkResult.status === 'RESTRICTED' || checkResult.qualityRating === 'RED') && (
                                                 <div className="bg-rose-500/10 border border-rose-500/30 p-4 rounded-xl flex flex-col sm:flex-row justify-between items-center gap-4">
                                                     <div className="flex items-center space-x-3 space-x-reverse">
@@ -377,7 +367,6 @@
                                                 </div>
                                             )}
 
-                                            {/* Raw Json Inspection */}
                                             <details className="bg-slate-950 p-4 rounded-xl text-xs font-mono text-slate-400 border border-slate-800">
                                                 <summary className="cursor-pointer font-bold text-slate-300 mb-2">استجابة Meta Graph API المباشرة (JSON)</summary>
                                                 <pre className="overflow-x-auto text-emerald-400">{JSON.stringify(checkResult.rawMetaResponse, null, 2)}</pre>
@@ -387,7 +376,6 @@
                                 </div>
                             )}
 
-                            {/* TAB 2: Official Appeal Manager */}
                             {activeTab === 'appeal' && (
                                 <div className="bg-slate-800 rounded-2xl p-6 border border-slate-700 space-y-6">
                                     <div>
@@ -428,30 +416,29 @@
                                         >
                                             {loading ? <i className="fas fa-spinner fa-spin"></i> : <><i className="fas fa-paper-plane"></i> <span>إرسال طلب فك الحظر عبر Meta API</span></>}
                                         </button>
-
-                                        <div className="pt-2 text-center">
-                                            <a 
-                                                href="https://facebook.com/accountquality" 
-                                                target="_blank" 
-                                                rel="noopener noreferrer"
-                                                className="text-xs text-sky-400 hover:underline"
-                                            >
-                                                <i className="fas fa-external-link-alt ml-1"></i> فتح صفحة جودة الحساب (Account Quality) في Meta مباشرة
-                                            </a>
-                                        </div>
                                     </div>
                                 </div>
                             )}
 
-                            {/* TAB 3: Config */}
                             {activeTab === 'config' && (
                                 <div className="bg-slate-800 rounded-2xl p-6 border border-slate-700 space-y-6">
                                     <div>
                                         <h2 className="text-xl font-bold text-white mb-1">بيانات مفاتيح الربط الرسمية (Meta API Config)</h2>
-                                        <p className="text-slate-400 text-sm">ضع رمز الوصول (Access Token) والمعرفات للربط الحقيقي مع Meta.</p>
+                                        <p className="text-slate-400 text-sm">ضع رابط الخادم الوسيط ومفاتيح Access Token للربط المباشر.</p>
                                     </div>
 
                                     <form onSubmit={handleSaveConfig} className="space-y-4">
+                                        <div>
+                                            <label className="block text-xs font-semibold text-slate-300 mb-2">Cloudflare Worker URL (رابط الخادم الوسيط):</label>
+                                            <input 
+                                                type="url"
+                                                value={apiConfig.workerUrl}
+                                                onChange={(e) => setApiConfig({...apiConfig, workerUrl: e.target.value})}
+                                                placeholder="https://whatsapp-proxy.your-subdomain.workers.dev"
+                                                className="w-full bg-slate-900 border border-slate-700 rounded-xl p-3 text-white text-sm focus:outline-none focus:border-emerald-500 font-mono"
+                                            />
+                                        </div>
+
                                         <div>
                                             <label className="block text-xs font-semibold text-slate-300 mb-2">Meta Access Token (رمز الوصول):</label>
                                             <input 
@@ -491,7 +478,7 @@
                                             type="submit"
                                             className="bg-emerald-500 hover:bg-emerald-600 text-white font-bold px-6 py-3 rounded-xl transition-all shadow-lg shadow-emerald-500/20"
                                         >
-                                            حفظ المفاتيح
+                                            حفظ الإعدادات
                                         </button>
                                     </form>
                                 </div>
